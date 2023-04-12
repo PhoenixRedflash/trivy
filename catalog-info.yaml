@@ -11,6 +11,8 @@ metadata:
       url: https://aquasecurity.github.io/trivy/v0.37/docs/
     - title: Security scan
       url: https://eteamspace.internal.ericsson.com/display/EWS/Security+scan+for+Trivy
+    - title: eteamspace
+      url: https://eteamspace.internal.ericsson.com/display/EWS/Trivy
   annotations:
     github.com/project-slug:  "PhoenixRedflash/trivy" 
     backstage.io/techdocs-ref: dir:.
