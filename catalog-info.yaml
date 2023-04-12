@@ -1,0 +1,20 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: trivy
+  description: 
+    Trivy is a comprehensive and versatile security scanner.
+  links:
+    - title: Website
+      url: https://github.com/PhoenixRedflash/trivy
+    - title: Documentation
+      url: https://aquasecurity.github.io/trivy/v0.37/docs/
+    - title: Security scan
+      url: https://eteamspace.internal.ericsson.com/display/EWS/Security+scan+for+Trivy
+  annotations:
+    github.com/project-slug:  "PhoenixRedflash/trivy" 
+    backstage.io/techdocs-ref: dir:.
+spec:
+  type: service
+  owner: "Group:sre"
+  lifecycle: experimental
