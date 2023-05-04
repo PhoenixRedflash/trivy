@@ -50,6 +50,7 @@ jobs:
         uses: aquaproj/aqua-installer@v2.0.2
         with:
           aqua_version: v1.25.0
+          aqua_opts: ""
 
       - name: Check if CLI references are up-to-date
         run: |
@@ -132,6 +133,7 @@ jobs:
     - name: Run GoReleaser
       uses: goreleaser/goreleaser-action@v4
       with:
-        version: v1.4.1
-        args: release --skip-sign --snapshot --rm-dist --skip-publish --timeout 90m
-
+        version: v1.16.2
+        args: release --skip-sign --snapshot --clean --skip-publish --timeout 90m
+      env:
+        GPG_FILE: "nogpg.key"
