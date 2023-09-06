@@ -7,15 +7,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/mitchellh/hashstructure/v2"
 	"github.com/samber/lo"
 	"github.com/spdx/tools-golang/spdx"
 	"github.com/spdx/tools-golang/spdx/v2/common"
 	"golang.org/x/exp/maps"
 	"golang.org/x/xerrors"
-	"k8s.io/utils/clock"
 
+	"github.com/aquasecurity/trivy/pkg/clock"
 	"github.com/aquasecurity/trivy/pkg/digest"
 	ftypes "github.com/aquasecurity/trivy/pkg/fanal/types"
 	"github.com/aquasecurity/trivy/pkg/licensing"
@@ -24,6 +23,7 @@ import (
 	"github.com/aquasecurity/trivy/pkg/purl"
 	"github.com/aquasecurity/trivy/pkg/scanner/utils"
 	"github.com/aquasecurity/trivy/pkg/types"
+	"github.com/aquasecurity/trivy/pkg/uuid"
 )
 
 const (
@@ -77,29 +77,13 @@ var (
 
 type Marshaler struct {
 	format     spdx.Document
-	clock      clock.Clock
-	newUUID    newUUID
 	hasher     Hash
 	appVersion string // Trivy version. It needed for `creator` field
 }
 
 type Hash func(v interface{}, format hashstructure.Format, opts *hashstructure.HashOptions) (uint64, error)
 
-type newUUID func() uuid.UUID
-
 type marshalOption func(*Marshaler)
-
-func WithClock(clock clock.Clock) marshalOption {
-	return func(opts *Marshaler) {
-		opts.clock = clock
-	}
-}
-
-func WithNewUUID(newUUID newUUID) marshalOption {
-	return func(opts *Marshaler) {
-		opts.newUUID = newUUID
-	}
-}
 
 func WithHasher(hasher Hash) marshalOption {
 	return func(opts *Marshaler) {
@@ -110,8 +94,6 @@ func WithHasher(hasher Hash) marshalOption {
 func NewMarshaler(version string, opts ...marshalOption) *Marshaler {
 	m := &Marshaler{
 		format:     spdx.Document{},
-		clock:      clock.RealClock{},
-		newUUID:    uuid.New,
 		hasher:     hashstructure.Hash,
 		appVersion: version,
 	}
@@ -138,7 +120,12 @@ func (m *Marshaler) Marshal(r types.Report) (*spdx.Document, error) {
 		relationShip(DocumentSPDXIdentifier, rootPkg.PackageSPDXIdentifier, RelationShipDescribe),
 	)
 
+	var spdxFiles []*spdx.File
+
 	for _, result := range r.Results {
+		if len(result.Packages) == 0 {
+			continue
+		}
 		parentPackage, err := m.resultToSpdxPackage(result, r.Metadata.OS, pkgDownloadLocation)
 		if err != nil {
 			return nil, xerrors.Errorf("failed to parse result: %w", err)
@@ -157,6 +144,16 @@ func (m *Marshaler) Marshal(r types.Report) (*spdx.Document, error) {
 			relationShips = append(relationShips,
 				relationShip(parentPackage.PackageSPDXIdentifier, spdxPackage.PackageSPDXIdentifier, RelationShipContains),
 			)
+			files, err := m.pkgFiles(pkg)
+			if err != nil {
+				return nil, xerrors.Errorf("package file error: %w", err)
+			}
+			spdxFiles = append(spdxFiles, files...)
+			for _, file := range files {
+				relationShips = append(relationShips,
+					relationShip(spdxPackage.PackageSPDXIdentifier, file.FileSPDXIdentifier, RelationShipContains),
+				)
+			}
 		}
 	}
 
@@ -177,10 +174,11 @@ func (m *Marshaler) Marshal(r types.Report) (*spdx.Document, error) {
 					CreatorType: "Tool",
 				},
 			},
-			Created: m.clock.Now().UTC().Format(time.RFC3339),
+			Created: clock.Now().UTC().Format(time.RFC3339),
 		},
 		Packages:      toPackages(packages),
 		Relationships: relationShips,
+		Files:         spdxFiles,
 	}, nil
 }
 
@@ -258,7 +256,7 @@ func (m *Marshaler) rootPackage(r types.Report, pkgDownloadLocation string) (*sp
 
 	pkgID, err := calcPkgID(m.hasher, fmt.Sprintf("%s-%s", r.ArtifactName, r.ArtifactType))
 	if err != nil {
-		return nil, xerrors.Errorf("failed to get %s package ID: %w", err)
+		return nil, xerrors.Errorf("failed to get %s package ID: %w", pkgID, err)
 	}
 
 	pkgPurpose := PackagePurposeSource
@@ -334,11 +332,6 @@ func (m *Marshaler) pkgToSpdxPackage(t, pkgDownloadLocation string, class types.
 	attrTexts = appendAttributionText(attrTexts, PropertyLayerDigest, pkg.Layer.Digest)
 	attrTexts = appendAttributionText(attrTexts, PropertyLayerDiffID, pkg.Layer.DiffID)
 
-	files, err := m.pkgFiles(pkg)
-	if err != nil {
-		return spdx.Package{}, xerrors.Errorf("package file error: %w", err)
-	}
-
 	supplier := &spdx.Supplier{Supplier: PackageSupplierNoAssertion}
 	if pkg.Maintainer != "" {
 		supplier = &spdx.Supplier{
@@ -346,6 +339,12 @@ func (m *Marshaler) pkgToSpdxPackage(t, pkgDownloadLocation string, class types.
 			Supplier:     pkg.Maintainer,
 		}
 	}
+
+	var checksum []spdx.Checksum
+	if pkg.Digest != "" && class == types.ClassOSPkg {
+		checksum = digestToSpdxFileChecksum(pkg.Digest)
+	}
+
 	return spdx.Package{
 		PackageName:             pkg.Name,
 		PackageVersion:          utils.FormatVersion(pkg),
@@ -363,7 +362,7 @@ func (m *Marshaler) pkgToSpdxPackage(t, pkgDownloadLocation string, class types.
 		PackageAttributionTexts:   attrTexts,
 		PrimaryPackagePurpose:     PackagePurposeLibrary,
 		PackageSupplier:           supplier,
-		Files:                     files,
+		PackageChecksums:          checksum,
 	}, nil
 }
 
@@ -374,7 +373,7 @@ func (m *Marshaler) pkgFiles(pkg ftypes.Package) ([]*spdx.File, error) {
 
 	file, err := m.parseFile(pkg.FilePath, pkg.Digest)
 	if err != nil {
-		return nil, xerrors.Errorf("failed to parse file: %w")
+		return nil, xerrors.Errorf("failed to parse file: %w", err)
 	}
 	return []*spdx.File{
 		&file,
@@ -439,7 +438,7 @@ func getDocumentNamespace(r types.Report, m *Marshaler) string {
 		DocumentNamespace,
 		string(r.ArtifactType),
 		strings.ReplaceAll(strings.ReplaceAll(r.ArtifactName, "https://", ""), "http://", ""), // remove http(s):// prefix when scanning repos
-		m.newUUID().String(),
+		uuid.New().String(),
 	)
 }
 
@@ -480,7 +479,7 @@ func getPackageDownloadLocation(t ftypes.ArtifactType, artifactName string) stri
 	location := noneField
 	// this field is used for git/mercurial/subversion/bazaar:
 	// https://spdx.github.io/spdx-spec/v2.2.2/package-information/#77-package-download-location-field
-	if t == ftypes.ArtifactRemoteRepository {
+	if t == ftypes.ArtifactRepository {
 		// Trivy currently only supports git repositories. Format examples:
 		// git+https://git.myproject.org/MyProject.git
 		// git+http://git.myproject.org/MyProject
@@ -500,6 +499,8 @@ func digestToSpdxFileChecksum(d digest.Digest) []common.Checksum {
 		alg = spdx.SHA1
 	case digest.SHA256:
 		alg = spdx.SHA256
+	case digest.MD5:
+		alg = spdx.MD5
 	default:
 		return nil
 	}

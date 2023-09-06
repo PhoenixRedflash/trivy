@@ -18,7 +18,6 @@ import (
 	"github.com/aquasecurity/trivy/pkg/fanal/types"
 	"github.com/aquasecurity/trivy/pkg/javadb"
 	"github.com/aquasecurity/trivy/pkg/mapfs"
-	"github.com/aquasecurity/trivy/pkg/syncx"
 
 	_ "github.com/aquasecurity/trivy/pkg/fanal/analyzer/imgconf/apk"
 	_ "github.com/aquasecurity/trivy/pkg/fanal/analyzer/language/java/jar"
@@ -59,7 +58,7 @@ func TestAnalysisResult_Merge(t *testing.T) {
 				PackageInfos: []types.PackageInfo{
 					{
 						FilePath: "var/lib/dpkg/status.d/libc",
-						Packages: []types.Package{
+						Packages: types.Packages{
 							{
 								Name:    "libc",
 								Version: "1.2.3",
@@ -71,7 +70,7 @@ func TestAnalysisResult_Merge(t *testing.T) {
 					{
 						Type:     "bundler",
 						FilePath: "app/Gemfile.lock",
-						Libraries: []types.Package{
+						Libraries: types.Packages{
 							{
 								Name:    "rails",
 								Version: "5.0.0",
@@ -85,7 +84,7 @@ func TestAnalysisResult_Merge(t *testing.T) {
 					PackageInfos: []types.PackageInfo{
 						{
 							FilePath: "var/lib/dpkg/status.d/openssl",
-							Packages: []types.Package{
+							Packages: types.Packages{
 								{
 									Name:    "openssl",
 									Version: "1.1.1",
@@ -97,7 +96,7 @@ func TestAnalysisResult_Merge(t *testing.T) {
 						{
 							Type:     "bundler",
 							FilePath: "app2/Gemfile.lock",
-							Libraries: []types.Package{
+							Libraries: types.Packages{
 								{
 									Name:    "nokogiri",
 									Version: "1.0.0",
@@ -115,7 +114,7 @@ func TestAnalysisResult_Merge(t *testing.T) {
 				PackageInfos: []types.PackageInfo{
 					{
 						FilePath: "var/lib/dpkg/status.d/libc",
-						Packages: []types.Package{
+						Packages: types.Packages{
 							{
 								Name:    "libc",
 								Version: "1.2.3",
@@ -124,7 +123,7 @@ func TestAnalysisResult_Merge(t *testing.T) {
 					},
 					{
 						FilePath: "var/lib/dpkg/status.d/openssl",
-						Packages: []types.Package{
+						Packages: types.Packages{
 							{
 								Name:    "openssl",
 								Version: "1.1.1",
@@ -136,7 +135,7 @@ func TestAnalysisResult_Merge(t *testing.T) {
 					{
 						Type:     "bundler",
 						FilePath: "app/Gemfile.lock",
-						Libraries: []types.Package{
+						Libraries: types.Packages{
 							{
 								Name:    "rails",
 								Version: "5.0.0",
@@ -146,7 +145,7 @@ func TestAnalysisResult_Merge(t *testing.T) {
 					{
 						Type:     "bundler",
 						FilePath: "app2/Gemfile.lock",
-						Libraries: []types.Package{
+						Libraries: types.Packages{
 							{
 								Name:    "nokogiri",
 								Version: "1.0.0",
@@ -336,7 +335,7 @@ func TestAnalyzerGroup_AnalyzeFile(t *testing.T) {
 				PackageInfos: []types.PackageInfo{
 					{
 						FilePath: "/lib/apk/db/installed",
-						Packages: []types.Package{
+						Packages: types.Packages{
 							{
 								ID:         "musl@1.1.24-r2",
 								Name:       "musl",
@@ -344,6 +343,8 @@ func TestAnalyzerGroup_AnalyzeFile(t *testing.T) {
 								SrcName:    "musl",
 								SrcVersion: "1.1.24-r2",
 								Licenses:   []string{"MIT"},
+								Arch:       "x86_64",
+								Digest:     "sha1:cb2316a189ebee5282c4a9bd98794cc2477a74c6",
 							},
 						},
 					},
@@ -374,7 +375,7 @@ func TestAnalyzerGroup_AnalyzeFile(t *testing.T) {
 					{
 						Type:     "bundler",
 						FilePath: "/app/Gemfile.lock",
-						Libraries: []types.Package{
+						Libraries: types.Packages{
 							{
 								ID:       "actioncable@5.2.3",
 								Name:     "actioncable",
@@ -435,7 +436,7 @@ func TestAnalyzerGroup_AnalyzeFile(t *testing.T) {
 					{
 						Type:     "bundler",
 						FilePath: "/app/Gemfile-dev.lock",
-						Libraries: []types.Package{
+						Libraries: types.Packages{
 							{
 								ID:       "actioncable@5.2.3",
 								Name:     "actioncable",
@@ -568,7 +569,7 @@ func TestAnalyzerGroup_PostAnalyze(t *testing.T) {
 					{
 						Type:     string(analyzer.TypeJar),
 						FilePath: "testdata/post-apps/jar/jackson-annotations-2.15.0-rc2.jar",
-						Libraries: []types.Package{
+						Libraries: types.Packages{
 							{
 								Name:     "com.fasterxml.jackson.core:jackson-annotations",
 								Version:  "2.15.0-rc2",
@@ -588,7 +589,7 @@ func TestAnalyzerGroup_PostAnalyze(t *testing.T) {
 					{
 						Type:     string(analyzer.TypePoetry),
 						FilePath: "testdata/post-apps/poetry/happy/poetry.lock",
-						Libraries: []types.Package{
+						Libraries: types.Packages{
 							{
 								ID:      "certifi@2022.12.7",
 								Name:    "certifi",
@@ -606,10 +607,12 @@ func TestAnalyzerGroup_PostAnalyze(t *testing.T) {
 			require.NoError(t, err)
 
 			// Create a virtual filesystem
-			files := new(syncx.Map[analyzer.Type, *mapfs.FS])
+			composite, err := analyzer.NewCompositeFS(analyzer.AnalyzerGroup{})
+			require.NoError(t, err)
+
 			mfs := mapfs.New()
 			require.NoError(t, mfs.CopyFilesUnder(tt.dir))
-			files.Store(tt.analyzerType, mfs)
+			composite.Set(tt.analyzerType, mfs)
 
 			if tt.analyzerType == analyzer.TypeJar {
 				// init java-trivy-db with skip update
@@ -618,7 +621,7 @@ func TestAnalyzerGroup_PostAnalyze(t *testing.T) {
 
 			ctx := context.Background()
 			got := new(analyzer.AnalysisResult)
-			err = a.PostAnalyze(ctx, files, got, analyzer.AnalysisOptions{})
+			err = a.PostAnalyze(ctx, composite, got, analyzer.AnalysisOptions{})
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
 		})

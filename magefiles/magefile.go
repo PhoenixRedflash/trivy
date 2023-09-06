@@ -12,10 +12,6 @@ import (
 	"github.com/magefile/mage/mg"
 	"github.com/magefile/mage/sh"
 	"github.com/magefile/mage/target"
-	"github.com/spf13/cobra/doc"
-
-	"github.com/aquasecurity/trivy/pkg/commands"
-	"github.com/aquasecurity/trivy/pkg/flag"
 )
 
 var (
@@ -41,7 +37,7 @@ func buildLdflags() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("-s -w -X=main.version=%s", ver), nil
+	return fmt.Sprintf("-s -w -X=github.com/aquasecurity/trivy/pkg/version.ver=%s", ver), nil
 }
 
 type Tool mg.Namespace
@@ -86,6 +82,11 @@ func (Tool) EasyJSON() error {
 		return nil
 	}
 	return sh.Run("go", "install", "github.com/mailru/easyjson/...@v0.7.7")
+}
+
+// Kind installs kind cluster
+func (Tool) Kind() error {
+	return sh.RunWithV(ENV, "go", "install", "sigs.k8s.io/kind@v0.19.0")
 }
 
 // Goyacc installs goyacc
@@ -153,7 +154,7 @@ func Protoc() error {
 	if err := sh.RunV("bash", "-c", "docker build -t trivy-protoc - < Dockerfile.protoc"); err != nil {
 		return err
 	}
-	return sh.Run("docker", "run", "--rm", "-it", "-v", "${PWD}:/app", "-w", "/app", "trivy-protoc", "mage", "protoc")
+	return sh.Run("docker", "run", "--rm", "-it", "--platform", "linux/x86_64", "-v", "${PWD}:/app", "-w", "/app", "trivy-protoc", "mage", "protoc")
 }
 
 // Yacc generates parser
@@ -198,6 +199,11 @@ func (Test) GenerateExampleModules() error {
 	return nil
 }
 
+// UpdateGolden updates golden files for integration tests
+func (Test) UpdateGolden() error {
+	return sh.RunWithV(ENV, "go", "test", "-tags=integration", "./integration/...", "./pkg/fanal/test/integration/...", "-update")
+}
+
 func compileWasmModules(pattern string) error {
 	goFiles, err := filepath.Glob(pattern)
 	if err != nil {
@@ -233,7 +239,25 @@ func (t Test) Unit() error {
 // Integration runs integration tests
 func (t Test) Integration() error {
 	mg.Deps(t.FixtureContainerImages)
-	return sh.RunWithV(ENV, "go", "test", "-v", "-tags=integration", "./integration/...", "./pkg/fanal/test/integration/...")
+	return sh.RunWithV(ENV, "go", "test", "-timeout", "15m", "-v", "-tags=integration", "./integration/...", "./pkg/fanal/test/integration/...")
+}
+
+// K8s runs k8s integration tests
+func (t Test) K8s() error {
+	mg.Deps(Tool{}.Kind)
+
+	err := sh.RunWithV(ENV, "kind", "create", "cluster", "--name", "kind-test")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = sh.RunWithV(ENV, "kind", "delete", "cluster", "--name", "kind-test")
+	}()
+	err = sh.RunWithV(ENV, "kubectl", "apply", "-f", "./integration/testdata/fixtures/k8s/test_nginx.yaml")
+	if err != nil {
+		return err
+	}
+	return sh.RunWithV(ENV, "go", "test", "-v", "-tags=k8s_integration", "./integration/...")
 }
 
 // Module runs Wasm integration tests
@@ -246,6 +270,11 @@ func (t Test) Module() error {
 func (t Test) VM() error {
 	mg.Deps(t.FixtureVMImages)
 	return sh.RunWithV(ENV, "go", "test", "-v", "-tags=vm_integration", "./integration/...")
+}
+
+// UpdateVMGolden updates golden files for integration tests
+func (Test) UpdateVMGolden() error {
+	return sh.RunWithV(ENV, "go", "test", "-v", "-tags=vm_integration", "./integration/...", "-update")
 }
 
 // Lint runs linters
@@ -344,20 +373,7 @@ func (Docs) Serve() error {
 
 // Generate generates CLI references
 func (Docs) Generate() error {
-	ver, err := version()
-	if err != nil {
-		return err
-	}
-	// Set a dummy path for the documents
-	flag.CacheDirFlag.Value = "/path/to/cache"
-	flag.ModuleDirFlag.Value = "$HOME/.trivy/modules"
-
-	cmd := commands.NewApp(ver)
-	cmd.DisableAutoGenTag = true
-	if err = doc.GenMarkdownTree(cmd, "./docs/docs/references/configuration/cli"); err != nil {
-		return err
-	}
-	return nil
+	return sh.RunWith(ENV, "go", "run", "-tags=mage_docs", "./magefiles")
 }
 
 func findProtoFiles() ([]string, error) {

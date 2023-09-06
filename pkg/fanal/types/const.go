@@ -31,14 +31,17 @@ const (
 	RustBinary = "rustbinary"
 	Conan      = "conan"
 	Cocoapods  = "cocoapods"
+	Swift      = "swift"
 	Pub        = "pub"
 	Hex        = "hex"
+	Bitnami    = "bitnami"
 
 	// Config files
 	YAML           = "yaml"
 	JSON           = "json"
 	Dockerfile     = "dockerfile"
 	Terraform      = "terraform"
+	TerraformPlan  = "terraformplan"
 	CloudFormation = "cloudformation"
 	Kubernetes     = "kubernetes"
 	Ansible        = "ansible"
@@ -79,6 +82,7 @@ const (
 	ConanLock = "conan.lock"
 
 	CocoaPodsLock = "Podfile.lock"
+	SwiftResolved = "Package.resolved"
 
 	PubSpecLock = "pubspec.lock"
 
